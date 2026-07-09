@@ -756,7 +756,7 @@ class ClaimApp:
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(0, 4, "Sincerely,", ln=True)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(0, 4, "Convera Settlements Team", ln=True)
+        pdf.cell(0, 4, "Convera Treasury Confirmation Team", ln=True)
 
         try:
             pdf.output(filepath)
