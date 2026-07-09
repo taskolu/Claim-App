@@ -657,12 +657,12 @@ class ClaimApp:
 
         # Subject
         pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 6, f"SUBJECT: Compensation Claim for Late Payment", ln=True)
+        pdf.cell(0, 6, f"SUBJECT: Compensation Claim for Late Settlement - Ref: {claim_ref}", ln=True)
         pdf.ln(3)
-        
+
         # Body
         pdf.set_font("Helvetica", "", 10)
-        pdf.multi_cell(0, 5, "Dear Customer,\n\nWe are writing to formally claim interest regarding the late settlement of the transaction detailed below. Please arrange payment of the compensation cost calculated as follows:")
+        pdf.multi_cell(0, 5, "Dear Settlements Team,\n\nWe hereby claim compensation for the late settlement of the transaction detailed below. The funds due to us were not received on the agreed value date, and we have incurred a corresponding cost of funds. Please arrange payment of the claim amount calculated as follows:")
         pdf.ln(5)
 
         # Table
@@ -744,9 +744,15 @@ class ClaimApp:
         pdf.set_y(box_start_y + box_h + 5)
 
         pdf.set_font("Helvetica", "", 8)
-        pdf.multi_cell(0, 4, f"Please remit the total claim amount to the account details provided above. If you have any queries regarding this calculation, please contact: {CONTACT_EMAIL}")
+        pdf.multi_cell(0, 4,
+            f"Please acknowledge this claim within 5 business days of the date of this letter and remit the total "
+            f"claim amount to the account details provided above, quoting the payment reference. If the claim "
+            f"remains unacknowledged, we will follow up accordingly. If you have any queries regarding this "
+            f"calculation, please contact: {CONTACT_EMAIL}")
+        pdf.ln(3)
+        pdf.multi_cell(0, 4, "This claim is made without prejudice to any other rights or remedies available to Convera.")
         pdf.ln(5)
-        
+
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(0, 4, "Sincerely,", ln=True)
         pdf.set_font("Helvetica", "B", 9)
@@ -805,10 +811,13 @@ class ClaimApp:
             paragraphs = [
                 "Dear All,",
                 f"We were due to receive {currency} {amount:,.2f} for value {date_due_str}. However, funds were received on {date_rec_str}.",
-                f"Hence, we have incurred a cost of {currency} {interest:,.2f} calculated at {rate}% for {days} day(s).",
-                "This claim represents the liquidity cost / cost of funds incurred by Convera due to the late settlement.",
-                "Please acknowledge our claim and pay our cost at your earliest convenience.",
-                "Kindly let us know if you have any questions regarding this claim. If you aren’t the intended department, please help to route this to the concerned team.",
+                f"We hereby claim compensation of <b>{currency} {interest:,.2f}</b>, calculated at {rate}% for {days} day(s) "
+                f"({currency} {amount:,.2f} × {days} × {rate}% / 360). This represents the liquidity cost / cost of funds "
+                f"incurred by Convera due to the late settlement.",
+                f"Please acknowledge this claim within <b>5 business days</b> and arrange settlement to the account detailed "
+                f"in the attached claim letter, quoting payment reference <b>{claim_ref} / CLAIM</b>.",
+                "Kindly let us know if you have any questions regarding this claim. If you aren’t the intended department, "
+                "please help to route this to the concerned team.",
             ]
             body_html = "".join(
                 f'<p style="font-family: Calibri, sans-serif; font-size: 11pt; margin: 0 0 12px 0;">{p}</p>'
