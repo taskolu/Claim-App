@@ -17,6 +17,8 @@ Desktop app (Tkinter) for generating late-settlement compensation claim letters 
   Changes are saved instantly to `~/.convera_claim_manager/counterparties.json`, so they persist across restarts **and app updates** — no more editing the code when an email address changes. On first run the file is seeded with the built-in default list. If the file ever becomes corrupted it is backed up as `counterparties.json.bak` and the defaults are restored.
 
 - When you pick a counterparty in the main form, its on-file email is shown underneath so you can verify it before drafting. If none is saved, you'll be warned before an email is drafted.
+- **Live claim preview** — days late and the claim amount are calculated as you type, with a red warning when the received date isn't after the due date.
+- **Type-to-search counterparty dropdown**, a **Clear** button to reset the form, and a **status bar** showing where the last PDF was saved.
 
 ## Setup
 

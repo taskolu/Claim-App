@@ -330,7 +330,8 @@ class ClaimApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Convera Claims Manager")
-        self.root.geometry("600x750")
+        self.root.geometry("640x800")
+        self.root.minsize(600, 720)
         self.root.configure(bg="#f5f5f5")
         
         self.ssi_data = {}
@@ -349,15 +350,20 @@ class ClaimApp:
         style.configure("TEntry", padding=5)
 
         # --- Layout ---
-        main_frame = ttk.Frame(root, padding="30")
+        # Header bar (Convera blue)
+        header = tk.Frame(root, bg="#0096C8")
+        header.pack(fill=tk.X)
+        tk.Label(header, text="Convera Claims Manager", bg="#0096C8", fg="white",
+                 font=("Segoe UI", 15, "bold"), padx=25, pady=12).pack(side=tk.LEFT)
+        tk.Button(header, text="⚙ Manage Counterparties", command=self.open_counterparty_manager,
+                  bg="#007AA3", fg="white", activebackground="#00658A", activeforeground="white",
+                  font=("Segoe UI", 9, "bold"), relief="flat", cursor="hand2",
+                  padx=12, pady=6).pack(side=tk.RIGHT, padx=20)
+
+        main_frame = ttk.Frame(root, padding="30 20 30 10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=tk.X, pady=(0, 20))
-        ttk.Label(title_frame, text="Generate Claim Letter", font=("Segoe UI", 18, "bold")).pack(side=tk.LEFT)
-        tk.Button(title_frame, text="⚙ Manage Counterparties", command=self.open_counterparty_manager,
-                  bg="#555", fg="white", font=("Segoe UI", 9, "bold"),
-                  relief="flat", padx=12, pady=5).pack(side=tk.RIGHT)
+        ttk.Label(main_frame, text="Generate Claim Letter", font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 15))
 
         # 1. SSI Section
         ssi_frame = ttk.Frame(main_frame)
@@ -379,9 +385,10 @@ class ClaimApp:
         self.cp_var = tk.StringVar()
         self.cp_combo = ttk.Combobox(grid_frame, textvariable=self.cp_var, values=self.counterparty_names())
         self.cp_combo.grid(row=0, column=1, sticky="ew", padx=(20, 0))
-        self.lbl_cp_email = ttk.Label(grid_frame, text="(Select or Type)", font=("Segoe UI", 8), foreground="gray")
+        self.lbl_cp_email = ttk.Label(grid_frame, text="(Select or type to search)", font=("Segoe UI", 8), foreground="gray")
         self.lbl_cp_email.grid(row=1, column=1, sticky="w", padx=(20, 0))
         self.cp_combo.bind("<<ComboboxSelected>>", self._on_counterparty_selected)
+        self.cp_combo.bind("<KeyRelease>", self._filter_counterparty_dropdown)
         self.cp_var.trace_add("write", lambda *a: self._on_counterparty_selected())
 
         # Claim Ref
@@ -404,7 +411,10 @@ class ClaimApp:
         self.curr_combo = ttk.Combobox(amt_frame, values=CURRENCY_LIST, width=5)
         self.curr_combo.current(CURRENCY_LIST.index("USD"))
         self.curr_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self.amount_entry = ttk.Entry(amt_frame, width=20)
+        self.curr_combo.bind("<<ComboboxSelected>>", lambda e: self._update_preview())
+        self.amount_var = tk.StringVar()
+        self.amount_var.trace_add("write", lambda *a: self._update_preview())
+        self.amount_entry = ttk.Entry(amt_frame, width=20, textvariable=self.amount_var)
         self.amount_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Dates
@@ -417,25 +427,93 @@ class ClaimApp:
         ttk.Label(date_frame, text="Received:").pack(side=tk.LEFT)
         self.date_rec = DateEntry(date_frame, width=12, date_pattern='dd/mm/yyyy', background='#444', foreground='white')
         self.date_rec.pack(side=tk.LEFT, padx=(5, 0))
+        self.date_due.bind("<<DateEntrySelected>>", lambda e: self._update_preview())
+        self.date_rec.bind("<<DateEntrySelected>>", lambda e: self._update_preview())
 
         # Rate
         ttk.Label(grid_frame, text="Rate (%):", style="Header.TLabel").grid(row=5, column=0, sticky="w", pady=10)
-        self.rate_entry = ttk.Entry(grid_frame, width=10)
+        self.rate_var = tk.StringVar()
+        self.rate_var.trace_add("write", lambda *a: self._update_preview())
+        self.rate_entry = ttk.Entry(grid_frame, width=10, textvariable=self.rate_var)
         self.rate_entry.grid(row=5, column=1, sticky="w", padx=(20, 0))
+
+        # Live claim preview
+        preview_box = tk.Frame(main_frame, bg="white", highlightbackground="#d0d0d0",
+                               highlightthickness=1)
+        preview_box.pack(fill=tk.X, pady=(20, 0))
+        tk.Label(preview_box, text="CLAIM PREVIEW", bg="white", fg="#888",
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=12, pady=(8, 0))
+        self.lbl_preview = tk.Label(preview_box, text="Enter amount, rate and dates to see the claim...",
+                                    bg="white", fg="#888", font=("Segoe UI", 12), anchor="w",
+                                    justify=tk.LEFT, padx=12, pady=8)
+        self.lbl_preview.pack(fill=tk.X)
 
         # Buttons
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(pady=40, fill=tk.X)
-        
-        gen_btn = tk.Button(btn_frame, text="GENERATE PDF", command=self.generate_pdf, 
-                           bg="#0096C8", fg="white", font=("Segoe UI", 11, "bold"), 
-                           relief="flat", padx=20, pady=10)
-        gen_btn.pack(side=tk.LEFT, padx=(50, 10))
+        btn_frame.pack(pady=25, fill=tk.X)
 
-        email_btn = tk.Button(btn_frame, text="DRAFT EMAIL", command=self.draft_email, 
-                           bg="#28a745", fg="white", font=("Segoe UI", 11, "bold"), 
-                           relief="flat", padx=20, pady=10)
-        email_btn.pack(side=tk.LEFT, padx=10)
+        def action_btn(text, cmd, color, active):
+            return tk.Button(btn_frame, text=text, command=cmd, bg=color, fg="white",
+                             activebackground=active, activeforeground="white", cursor="hand2",
+                             font=("Segoe UI", 11, "bold"), relief="flat", padx=20, pady=10)
+
+        action_btn("GENERATE PDF", self.generate_pdf, "#0096C8", "#007AA3").pack(side=tk.LEFT, padx=(50, 10))
+        action_btn("DRAFT EMAIL", self.draft_email, "#28a745", "#1F8637").pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="CLEAR", command=self.clear_form, bg="#f5f5f5", fg="#666",
+                  activebackground="#e0e0e0", cursor="hand2", font=("Segoe UI", 10),
+                  relief="flat", padx=15, pady=10).pack(side=tk.RIGHT)
+
+        # Status bar
+        self.lbl_status = tk.Label(root, text="Ready", bg="#e8e8e8", fg="#555", anchor="w",
+                                   font=("Segoe UI", 8), padx=12, pady=4)
+        self.lbl_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    # --- GUI helpers ---
+    def set_status(self, text):
+        self.lbl_status.config(text=text)
+
+    def _filter_counterparty_dropdown(self, event):
+        """Type-to-search: narrow the dropdown list to names containing the typed text."""
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            return
+        text = self.cp_var.get().strip().lower()
+        names = self.counterparty_names()
+        matches = [n for n in names if text in n.lower()] if text else names
+        self.cp_combo.config(values=matches or names)
+
+    def _update_preview(self):
+        data = self.get_data()
+        if not data:
+            self.lbl_preview.config(text="Enter amount, rate and dates to see the claim...",
+                                    fg="#888", font=("Segoe UI", 12))
+            return
+        amount, rate, days, d1, d2 = data
+        if amount <= 0 or not self.rate_var.get().strip():
+            self.lbl_preview.config(text="Enter amount, rate and dates to see the claim...",
+                                    fg="#888", font=("Segoe UI", 12))
+            return
+        currency = self.curr_combo.get()
+        interest = (amount * days * (rate / 100)) / 360
+        if days <= 0:
+            self.lbl_preview.config(
+                text=f"Days late: {days}  -  claim would be {currency} 0.00\nCheck the dates: received date is not after the due date.",
+                fg="#d9534f", font=("Segoe UI", 11))
+        else:
+            self.lbl_preview.config(
+                text=f"{days} day(s) late  ·  Claim: {currency} {interest:,.2f}",
+                fg="#0096C8", font=("Segoe UI", 14, "bold"))
+
+    def clear_form(self):
+        self.cp_var.set("")
+        self.amount_var.set("")
+        self.rate_var.set("")
+        self.ref_suffix_combo.current(0)
+        today = datetime.now().date()
+        self.date_due.set_date(today)
+        self.date_rec.set_date(today)
+        self.cp_combo.config(values=self.counterparty_names())
+        self._update_preview()
+        self.set_status("Form cleared")
 
     # --- Counterparty management ---
     def counterparty_names(self):
@@ -677,6 +755,7 @@ class ClaimApp:
         try:
             pdf.output(filepath)
             self.last_generated_pdf = filepath
+            self.set_status(f"PDF saved: {filepath}")
             messagebox.showinfo("Success", "PDF Generated!")
             os.startfile(filepath)
         except Exception as e:
@@ -754,6 +833,7 @@ class ClaimApp:
             mail.Attachments.Add(self.last_generated_pdf)
             if self.ssi_pdf_path and os.path.exists(self.ssi_pdf_path):
                 mail.Attachments.Add(self.ssi_pdf_path)
+            self.set_status(f"Email drafted for {cp_name}")
                 
         except Exception as e:
             messagebox.showerror("Outlook Error", f"Failed to draft email:\n{e}")
