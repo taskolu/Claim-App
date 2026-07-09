@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 from tkcalendar import DateEntry
 from fpdf import FPDF
 from datetime import datetime
+import json
 import os
 import sys # Required for EXE resource path
 import pdfplumber
@@ -42,8 +43,14 @@ COMPANY_ADDR = [
 ]
 CONTACT_EMAIL = "TreasuryConfirms@Convera.com"
 
-# --- EMAIL MAPPING ---
-COUNTERPARTY_EMAILS = {
+# --- COUNTERPARTY STORE ---
+# Counterparties live in a JSON file so they can be added/edited/removed from
+# inside the app (Manage Counterparties button) and survive app updates.
+# The defaults below are only used to seed the file on first run.
+APP_DATA_DIR = os.path.join(USER_BASE, ".convera_claim_manager")
+COUNTERPARTY_FILE = os.path.join(APP_DATA_DIR, "counterparties.json")
+
+DEFAULT_COUNTERPARTIES = {
     "BANK OF AMERICA, N.A., New Castle": "usfxcomp@bofa.com; emeaservicingfi@bankofamerica.com; usfxcomp@bofa.com",
     "Bank of Montreal Toronto, Montreal": "bmo.investigation@bmo.com",
     "BARCLAYS BANK PLC, Washington": "xrasgptsyinterestcla@barclays.com",
@@ -65,6 +72,45 @@ COUNTERPARTY_EMAILS = {
     "WELLS FARGO BANK, NATIONAL ASSOCIAT, NEW YORK": "SFFXCorporate@wellsfargo.com; Neethu.Abraham@wellsfargo.com"
 }
 
+
+def load_counterparties():
+    """Load counterparties from JSON, seeding with defaults on first run.
+    A corrupt file is backed up (.bak) instead of being silently overwritten."""
+    try:
+        with open(COUNTERPARTY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data:
+            return {str(k).strip(): str(v).strip() for k, v in data.items() if str(k).strip()}
+    except FileNotFoundError:
+        pass
+    except Exception:
+        try:
+            os.replace(COUNTERPARTY_FILE, COUNTERPARTY_FILE + ".bak")
+        except Exception:
+            pass
+    counterparties = dict(DEFAULT_COUNTERPARTIES)
+    save_counterparties(counterparties)
+    return counterparties
+
+
+def save_counterparties(counterparties):
+    """Atomically persist the counterparty dict to JSON."""
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    tmp_path = COUNTERPARTY_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(counterparties, f, indent=2, ensure_ascii=False, sort_keys=True)
+    os.replace(tmp_path, COUNTERPARTY_FILE)
+
+
+def validate_emails(email_str):
+    """Check a 'a@b.com; c@d.com' string. Returns (ok, cleaned_string_or_error).
+    An empty string is allowed (counterparty with no email yet)."""
+    parts = [p.strip() for p in email_str.replace(",", ";").split(";") if p.strip()]
+    for part in parts:
+        if part.count("@") != 1 or "." not in part.split("@")[1] or " " in part:
+            return False, f"'{part}' does not look like a valid email address."
+    return True, "; ".join(parts)
+
 # --- Data Lists ---
 CURRENCY_LIST = sorted([
     "AED", "AUD", "BGN", "BHD", "BWP", "CAD", "CHF", "CNH", "CZK", "DKK", 
@@ -75,27 +121,172 @@ CURRENCY_LIST = sorted([
     "XAF", "XOF", "XPF", "ZAR", "ZMW"
 ])
 
-COUNTERPARTY_LIST = sorted([
-    "BANK OF AMERICA, N.A., New Castle",
-    "Bank of Montreal Toronto, Montreal",
-    "BARCLAYS BANK PLC, Washington",
-    "CITI EUROPE, DUBLIN",
-    "CITIBANK, NATIONAL ASSOCIATION, New Castle",
-    "CROWN AGENTS BANK LTD, SUTTON",
-    "Deutsche Bank AG, FRANKFURT",
-    "Fifth Third Bank, National Associat, CINCINNATI",
-    "Macquarie Group Ltd, SYDNEY",
-    "Merrill Lynch International, LONDON",
-    "Mizuho Capital Markets Corporation, NEW YORK",
-    "MORGAN STANLEY & CO. INTERNATIONAL, LONDON",
-    "Nomura International PLC, LONDON",
-    "Royal Bank of Canada, TORONTO",
-    "Societe Generale SA, PARIS",
-    "State Street Bank and Trust Company, BOSTON",
-    "U.S. BANK N.A., MINNEAPOLIS",
-    "UBS AG, Washington",
-    "WELLS FARGO BANK, NATIONAL ASSOCIAT, NEW YORK"
-])
+class CounterpartyEditDialog(tk.Toplevel):
+    """Small modal form to add a new counterparty or edit an existing one."""
+
+    def __init__(self, parent, title, name="", emails=""):
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.configure(bg="#f5f5f5")
+        self.result = None  # (name, emails) when saved
+
+        frame = ttk.Frame(self, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Name:", style="Header.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.name_entry = ttk.Entry(frame, width=55)
+        self.name_entry.insert(0, name)
+        self.name_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=(0, 8))
+
+        ttk.Label(frame, text="Email(s):", style="Header.TLabel").grid(row=1, column=0, sticky="w")
+        self.email_entry = ttk.Entry(frame, width=55)
+        self.email_entry.insert(0, emails)
+        self.email_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0))
+        ttk.Label(frame, text="Separate multiple addresses with ; (semicolon)",
+                  font=("Segoe UI", 8), foreground="gray").grid(row=2, column=1, sticky="w", padx=(10, 0))
+
+        btns = ttk.Frame(frame)
+        btns.grid(row=3, column=0, columnspan=2, pady=(20, 0))
+        tk.Button(btns, text="SAVE", command=self._save, bg="#0096C8", fg="white",
+                  font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=5).pack(side=tk.LEFT, padx=5)
+        tk.Button(btns, text="CANCEL", command=self.destroy, bg="#999", fg="white",
+                  font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=5).pack(side=tk.LEFT, padx=5)
+
+        self.name_entry.focus_set()
+        self.bind("<Return>", lambda e: self._save())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.transient(parent)
+        self.grab_set()
+
+    def _save(self):
+        name = self.name_entry.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Counterparty name is required.", parent=self)
+            return
+        ok, emails_or_err = validate_emails(self.email_entry.get())
+        if not ok:
+            messagebox.showerror("Error", emails_or_err, parent=self)
+            return
+        self.result = (name, emails_or_err)
+        self.destroy()
+
+
+class CounterpartyManager(tk.Toplevel):
+    """Manage counterparties: add new ones, edit names/emails, remove old ones.
+    Changes are saved to disk immediately and pushed back to the main window."""
+
+    def __init__(self, parent, counterparties, on_change):
+        super().__init__(parent)
+        self.title("Manage Counterparties")
+        self.geometry("820x480")
+        self.configure(bg="#f5f5f5")
+        self.counterparties = counterparties
+        self.on_change = on_change
+
+        frame = ttk.Frame(self, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        top = ttk.Frame(frame)
+        top.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(top, text="Counterparties", font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *a: self._refresh_tree())
+        search_entry = ttk.Entry(top, textvariable=self.search_var, width=30)
+        search_entry.pack(side=tk.RIGHT)
+        ttk.Label(top, text="Search:").pack(side=tk.RIGHT, padx=(0, 5))
+
+        # Table
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.tree = ttk.Treeview(tree_frame, columns=("name", "emails"), show="headings", selectmode="browse")
+        self.tree.heading("name", text="Counterparty")
+        self.tree.heading("emails", text="Email Address(es)")
+        self.tree.column("name", width=320, anchor="w")
+        self.tree.column("emails", width=440, anchor="w")
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.bind("<Double-1>", lambda e: self.edit_selected())
+
+        # Buttons
+        btns = ttk.Frame(frame)
+        btns.pack(fill=tk.X, pady=(15, 0))
+
+        def styled_btn(text, cmd, color):
+            return tk.Button(btns, text=text, command=cmd, bg=color, fg="white",
+                             font=("Segoe UI", 10, "bold"), relief="flat", padx=15, pady=6)
+
+        styled_btn("+ ADD", self.add_new, "#28a745").pack(side=tk.LEFT, padx=(0, 8))
+        styled_btn("EDIT", self.edit_selected, "#0096C8").pack(side=tk.LEFT, padx=8)
+        styled_btn("REMOVE", self.remove_selected, "#d9534f").pack(side=tk.LEFT, padx=8)
+        styled_btn("CLOSE", self.destroy, "#999").pack(side=tk.RIGHT)
+
+        self._refresh_tree()
+        self.transient(parent)
+        self.grab_set()
+
+    def _refresh_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        query = self.search_var.get().strip().lower()
+        for name in sorted(self.counterparties, key=str.lower):
+            emails = self.counterparties[name]
+            if query and query not in name.lower() and query not in emails.lower():
+                continue
+            self.tree.insert("", tk.END, iid=name, values=(name, emails or "(no email on file)"))
+
+    def _selected_name(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Select", "Please select a counterparty first.", parent=self)
+            return None
+        return sel[0]
+
+    def _persist(self):
+        try:
+            save_counterparties(self.counterparties)
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Could not save counterparties:\n{e}", parent=self)
+        self.on_change()
+        self._refresh_tree()
+
+    def add_new(self):
+        dlg = CounterpartyEditDialog(self, "Add Counterparty")
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        name, emails = dlg.result
+        if name in self.counterparties:
+            messagebox.showerror("Error", f"'{name}' already exists. Use EDIT to change it.", parent=self)
+            return
+        self.counterparties[name] = emails
+        self._persist()
+
+    def edit_selected(self):
+        old_name = self._selected_name()
+        if not old_name:
+            return
+        dlg = CounterpartyEditDialog(self, "Edit Counterparty", old_name, self.counterparties[old_name])
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        new_name, emails = dlg.result
+        if new_name != old_name and new_name in self.counterparties:
+            messagebox.showerror("Error", f"'{new_name}' already exists.", parent=self)
+            return
+        del self.counterparties[old_name]
+        self.counterparties[new_name] = emails
+        self._persist()
+
+    def remove_selected(self):
+        name = self._selected_name()
+        if not name:
+            return
+        if messagebox.askyesno("Confirm Removal", f"Remove counterparty?\n\n{name}", parent=self):
+            del self.counterparties[name]
+            self._persist()
 
 class MinimalClaimPDF(FPDF):
     def header(self):
@@ -141,9 +332,10 @@ class ClaimApp:
         self.root.geometry("600x750")
         self.root.configure(bg="#f5f5f5")
         
-        self.ssi_data = {} 
+        self.ssi_data = {}
         self.ssi_pdf_path = None
         self.last_generated_pdf = None
+        self.counterparties = load_counterparties()
 
         style = ttk.Style()
         style.theme_use('clam')
@@ -159,7 +351,12 @@ class ClaimApp:
         main_frame = ttk.Frame(root, padding="30")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Generate Claim Letter", font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 20))
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 20))
+        ttk.Label(title_frame, text="Generate Claim Letter", font=("Segoe UI", 18, "bold")).pack(side=tk.LEFT)
+        tk.Button(title_frame, text="⚙ Manage Counterparties", command=self.open_counterparty_manager,
+                  bg="#555", fg="white", font=("Segoe UI", 9, "bold"),
+                  relief="flat", padx=12, pady=5).pack(side=tk.RIGHT)
 
         # 1. SSI Section
         ssi_frame = ttk.Frame(main_frame)
@@ -179,9 +376,12 @@ class ClaimApp:
         # Counterparty
         ttk.Label(grid_frame, text="Counterparty:", style="Header.TLabel").grid(row=0, column=0, sticky="w", pady=10)
         self.cp_var = tk.StringVar()
-        self.cp_combo = ttk.Combobox(grid_frame, textvariable=self.cp_var, values=COUNTERPARTY_LIST)
+        self.cp_combo = ttk.Combobox(grid_frame, textvariable=self.cp_var, values=self.counterparty_names())
         self.cp_combo.grid(row=0, column=1, sticky="ew", padx=(20, 0))
-        ttk.Label(grid_frame, text="(Select or Type)", font=("Segoe UI", 8), foreground="gray").grid(row=1, column=1, sticky="w", padx=(20, 0))
+        self.lbl_cp_email = ttk.Label(grid_frame, text="(Select or Type)", font=("Segoe UI", 8), foreground="gray")
+        self.lbl_cp_email.grid(row=1, column=1, sticky="w", padx=(20, 0))
+        self.cp_combo.bind("<<ComboboxSelected>>", self._on_counterparty_selected)
+        self.cp_var.trace_add("write", lambda *a: self._on_counterparty_selected())
 
         # Claim Ref
         ttk.Label(grid_frame, text="Claim Ref:", style="Header.TLabel").grid(row=2, column=0, sticky="w", pady=10)
@@ -235,6 +435,30 @@ class ClaimApp:
                            bg="#28a745", fg="white", font=("Segoe UI", 11, "bold"), 
                            relief="flat", padx=20, pady=10)
         email_btn.pack(side=tk.LEFT, padx=10)
+
+    # --- Counterparty management ---
+    def counterparty_names(self):
+        return sorted(self.counterparties, key=str.lower)
+
+    def _on_counterparty_selected(self, event=None):
+        name = self.cp_var.get()
+        if not name:
+            self.lbl_cp_email.config(text="(Select or Type)", foreground="gray")
+            return
+        emails = self.counterparties.get(name)
+        if emails:
+            self.lbl_cp_email.config(text=f"Email: {emails}", foreground="green")
+        elif name in self.counterparties:
+            self.lbl_cp_email.config(text="No email on file - add one via Manage Counterparties", foreground="#d9534f")
+        else:
+            self.lbl_cp_email.config(text="Not in counterparty list - email must be entered manually", foreground="#e68a00")
+
+    def refresh_counterparty_combo(self):
+        self.cp_combo.config(values=self.counterparty_names())
+        self._on_counterparty_selected()
+
+    def open_counterparty_manager(self):
+        CounterpartyManager(self.root, self.counterparties, self.refresh_counterparty_combo)
 
     def startup_ssi_check(self):
         target_dir = SSI_FOLDER_PATH
@@ -478,8 +702,17 @@ class ClaimApp:
         
         date_due_str = d1.strftime("%d %b %Y")
         date_rec_str = d2.strftime("%d %b %Y")
-        recipient_email = COUNTERPARTY_EMAILS.get(cp_name, "")
-        
+        recipient_email = self.counterparties.get(cp_name, "")
+        if not recipient_email:
+            proceed = messagebox.askyesno(
+                "No Email On File",
+                f"No email address is saved for:\n\n{cp_name}\n\n"
+                "You can add one via 'Manage Counterparties'.\n"
+                "Draft the email anyway (recipient left blank)?"
+            )
+            if not proceed:
+                return
+
         try:
             outlook = win32.Dispatch('outlook.application')
             mail = outlook.CreateItem(0)
