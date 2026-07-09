@@ -5,6 +5,7 @@ from fpdf import FPDF
 from datetime import datetime
 import json
 import os
+import re
 import sys # Required for EXE resource path
 import pdfplumber
 
@@ -722,16 +723,34 @@ class ClaimApp:
             mail.Subject = f"Interest Claim for Notional Amount {currency} {amount:,.2f} / VD {date_due_str} / {claim_ref}"
             mail.Display()
             
-            body_html = f"""
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">Dear All,</p>
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">We were due to receive {currency} {amount:,.2f} for value {date_due_str}. However, funds were received on {date_rec_str}.</p>
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">Hence, we have incurred a cost of {currency} {interest:,.2f} calculated at {rate}% for {days} day(s).</p>
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">This claim represents the liquidity cost / cost of funds incurred by Convera due to the late settlement.</p>
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">Please acknowledge our claim and pay our cost at your earliest convenience.</p>
-            <p style="font-family: Calibri, sans-serif; font-size: 11pt;">Kindly let us know if you have any questions regarding this claim. If you aren’t the intended department, please help to route this to the concerned team.</p>
-            <br>
-            """
-            mail.HTMLBody = body_html + mail.HTMLBody
+            paragraphs = [
+                "Dear All,",
+                f"We were due to receive {currency} {amount:,.2f} for value {date_due_str}. However, funds were received on {date_rec_str}.",
+                f"Hence, we have incurred a cost of {currency} {interest:,.2f} calculated at {rate}% for {days} day(s).",
+                "This claim represents the liquidity cost / cost of funds incurred by Convera due to the late settlement.",
+                "Please acknowledge our claim and pay our cost at your earliest convenience.",
+                "Kindly let us know if you have any questions regarding this claim. If you aren’t the intended department, please help to route this to the concerned team.",
+            ]
+            body_html = "".join(
+                f'<p style="font-family: Calibri, sans-serif; font-size: 11pt; margin: 0 0 12px 0;">{p}</p>'
+                for p in paragraphs
+            )
+
+            # Outlook's default HTMLBody starts with empty "cursor" paragraphs
+            # before the signature; prepending text above them creates a large
+            # gap between the body and the signature. Strip those empty
+            # paragraphs and inject our text inside the <body> tag instead of
+            # concatenating two full HTML documents.
+            signature_html = mail.HTMLBody
+            signature_html = re.sub(
+                r"<p\b[^>]*>(?:\s|&nbsp;|<o:p>|</o:p>|<br[^>]*>)*</p>",
+                "", signature_html, flags=re.IGNORECASE)
+            body_open = re.search(r"<body[^>]*>", signature_html, re.IGNORECASE)
+            if body_open:
+                idx = body_open.end()
+                mail.HTMLBody = signature_html[:idx] + body_html + signature_html[idx:]
+            else:
+                mail.HTMLBody = body_html + signature_html
             mail.Attachments.Add(self.last_generated_pdf)
             if self.ssi_pdf_path and os.path.exists(self.ssi_pdf_path):
                 mail.Attachments.Add(self.ssi_pdf_path)
